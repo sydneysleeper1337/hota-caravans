@@ -9,9 +9,11 @@ The first click on **Send** displays the complete price. Resources are charged o
 - In-game, Heroes III-styled selection window; no separate desktop application.
 - Explicit confirmation before any resources are spent.
 - Orders from captured dwellings and from other owned towns.
+- A single **All** button selects every available creature the player can currently afford.
 - A physical wagon on the adventure map.
 - Heroes, monsters and garrisons block the route until the obstacle is removed.
 - Friendly players can retrieve the troops; enemies can attack the caravan.
+- An emptied caravan disappears automatically after the troop-transfer window closes.
 - Configurable hotkey in `Caravan.ini`.
 - Works without editing maps and does not modify the original game executables.
 
@@ -28,7 +30,7 @@ The installer refuses to patch any other executable. Vanilla SoD/Complete, ERA/W
 
 ## Installation
 
-1. Download `Caravan_HotA_1.8.0.zip` from the `release` folder or from the GitHub release.
+1. Download `Caravan_HotA_1.8.0.zip` from the `release` folder.
 2. Extract the `Caravan_HotA_1.8.0` folder directly into the HotA game directory, beside `h3hota.exe`.
 3. Run `Установить.bat`.
 4. Launch `h3hota Caravan HD.exe`.

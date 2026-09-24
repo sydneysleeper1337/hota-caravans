@@ -82,6 +82,7 @@ constexpr int kIdFilterAll = 1010;
 constexpr int kIdFilterDwellings = 1011;
 constexpr int kIdFilterReserves = 1012;
 constexpr int kIdFilterGarrisons = 1013;
+constexpr int kIdBuyAll = 1014;
 
 enum class SourceKind { Dwelling, TownPool, TownGarrison };
 
@@ -147,6 +148,9 @@ HBRUSH g_labelBrush = nullptr;
 HBRUSH g_titleBrush = nullptr;
 HIMAGELIST g_cardImages = nullptr;
 std::vector<CaravanRow> g_rows;
+#ifdef CARAVAN_PHYSICS
+std::vector<uint32_t> g_emptyCaravanSince;
+#endif
 
 static void Log(const char* message) {
     FILE* file = fopen("Caravan.log", "a");
@@ -639,6 +643,35 @@ static void RestoreCaravanInteractionTypes(const MapAccess& map) {
     }
 }
 
+static void CleanupEmptyPhysicalCaravans(const MapAccess& map) {
+    ExeVector* vector = VectorAt(kGameGarrisonPoolOffset);
+    const size_t count = VectorCount(vector, sizeof(PhysicalGarrison), 4096);
+    if (g_emptyCaravanSince.size() < count) g_emptyCaravanSince.resize(count, 0);
+    const uint32_t now = GetTickCount();
+    for (size_t index = 0; index < count; ++index) {
+        auto& caravan = *reinterpret_cast<PhysicalGarrison*>(vector->begin + index * sizeof(PhysicalGarrison));
+        if (!IsPhysicalCaravan(caravan) || !ArmyIsEmpty(caravan.army)) {
+            g_emptyCaravanSince[index] = 0;
+            continue;
+        }
+        // Give the native garrison dialog time to finish after the player
+        // transfers the last stack. The record stays allocated, so the
+        // dialog keeps a valid address while the map object is removed soon
+        // after it closes instead of lingering until the following day.
+        if (!g_emptyCaravanSince[index]) {
+            g_emptyCaravanSince[index] = now ? now : 1;
+            continue;
+        }
+        if (now - g_emptyCaravanSince[index] < 2000u) continue;
+        uint8_t* cell = MapCell(map, caravan.x, caravan.y, caravan.z);
+        const bool objectStillPresent = cell && CellObjectType(cell) == kObjectGarrison &&
+                                        *reinterpret_cast<uint32_t*>(cell) == index;
+        DeactivateCaravan(map, caravan, objectStillPresent);
+        g_emptyCaravanSince[index] = 0;
+        Log("Empty caravan removed after troop collection.");
+    }
+}
+
 static void ProcessPhysicalCaravans() {
     MapAccess map{};
     if (!GetMapAccess(map)) return;
@@ -705,9 +738,11 @@ static void TickPhysicalCaravans() {
     if (map.cells != g_lastMapCells) {
         g_lastMapCells = map.cells;
         g_lastGameDay = day;
+        g_emptyCaravanSince.clear();
         RestoreCaravanInteractionTypes(map);
         return;
     }
+    CleanupEmptyPhysicalCaravans(map);
     if (day == g_lastGameDay) return;
     const bool nextDay = g_lastGameDay != UINT32_MAX && day == g_lastGameDay + 1;
     g_lastGameDay = day;
@@ -904,6 +939,22 @@ static int Quantity() {
     return value > 0 ? value : 1;
 }
 
+static int MaximumOrderQuantity(const CaravanRow& row) {
+    int maximum = std::max(0, Available(row));
+    if (!maximum || !IsPaid(row)) return maximum;
+    const int owner = g_destinationTown ? static_cast<int8_t>(g_destinationTown[kTownOwnerOffset]) : -1;
+    int* resources = PlayerResources(owner);
+    uint8_t* traits = CreatureTraits(row.creature);
+    if (!resources || !traits) return 0;
+    const int* perUnit = reinterpret_cast<int*>(traits + kCreatureCostOffset);
+    for (int resource = 0; resource < 7; ++resource) {
+        if (perUnit[resource] < 0) return 0;
+        if (perUnit[resource] > 0)
+            maximum = std::min(maximum, resources[resource] / perUnit[resource]);
+    }
+    return std::max(0, maximum);
+}
+
 static void UpdatePrice() {
     const int index = SelectedRowIndex();
     std::wstring value = L"Выберите существ в списке.";
@@ -920,6 +971,25 @@ static void CancelConfirmation() {
 
 static void ShowStatus(const std::wstring& value) {
     if (g_price) SetWindowTextW(g_price, value.c_str());
+}
+
+static void SelectMaximumQuantity() {
+    const int index = SelectedRowIndex();
+    if (index < 0 || index >= static_cast<int>(g_rows.size())) {
+        CancelConfirmation();
+        ShowStatus(L"Сначала выберите отряд в списке.");
+        return;
+    }
+    const int maximum = MaximumOrderQuantity(g_rows[index]);
+    if (maximum <= 0) {
+        CancelConfirmation();
+        ShowStatus(L"Недостаточно ресурсов для покупки выбранных существ.");
+        return;
+    }
+    const std::wstring value = std::to_wstring(maximum);
+    SetWindowTextW(g_quantity, value.c_str());
+    CancelConfirmation();
+    UpdatePrice();
 }
 
 #ifndef CARAVAN_PHYSICS
@@ -1268,7 +1338,8 @@ static LRESULT CALLBACK DialogProc(HWND window, UINT message, WPARAM wParam, LPA
         g_quantity = CreateWindowW(L"EDIT", L"1", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER | ES_RIGHT, 132, 501, 90, 27, window, reinterpret_cast<HMENU>(kIdQuantity), nullptr, nullptr);
         HWND spin = CreateWindowW(UPDOWN_CLASSW, L"", WS_CHILD | WS_VISIBLE | UDS_ALIGNRIGHT | UDS_SETBUDDYINT | UDS_ARROWKEYS, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kIdSpin), nullptr, nullptr);
         SendMessageW(spin, UDM_SETBUDDY, reinterpret_cast<WPARAM>(g_quantity), 0); SendMessageW(spin, UDM_SETRANGE32, 1, 32767);
-        g_price = CreateWindowW(L"STATIC", L"Выберите существ в списке.", WS_CHILD | WS_VISIBLE, 246, 500, 590, 42, window, reinterpret_cast<HMENU>(kIdPrice), nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"Все", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 232, 500, 82, 30, window, reinterpret_cast<HMENU>(kIdBuyAll), nullptr, nullptr);
+        g_price = CreateWindowW(L"STATIC", L"Выберите существ в списке.", WS_CHILD | WS_VISIBLE, 326, 500, 510, 42, window, reinterpret_cast<HMENU>(kIdPrice), nullptr, nullptr);
         g_send = CreateWindowW(L"BUTTON", L"Отправить", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 596, 558, 112, 36, window, reinterpret_cast<HMENU>(kIdSend), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Закрыть", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 724, 558, 112, 36, window, reinterpret_cast<HMENU>(kIdClose), nullptr, nullptr);
 #ifdef CARAVAN_PHYSICS
@@ -1326,7 +1397,7 @@ static LRESULT CALLBACK DialogProc(HWND window, UINT message, WPARAM wParam, LPA
             DrawFilterButton(reinterpret_cast<DRAWITEMSTRUCT*>(lParam));
             return TRUE;
         }
-        if (wParam == kIdSend || wParam == kIdClose) {
+        if (wParam == kIdSend || wParam == kIdClose || wParam == kIdBuyAll) {
             DrawGoldButton(reinterpret_cast<DRAWITEMSTRUCT*>(lParam));
             return TRUE;
         }
@@ -1346,6 +1417,7 @@ static LRESULT CALLBACK DialogProc(HWND window, UINT message, WPARAM wParam, LPA
     case WM_COMMAND:
         if (LOWORD(wParam) == kIdClose) { DestroyWindow(window); return 0; }
         if (LOWORD(wParam) == kIdSend) { SendCaravan(window); return 0; }
+        if (LOWORD(wParam) == kIdBuyAll && HIWORD(wParam) == BN_CLICKED) { SelectMaximumQuantity(); return 0; }
         if (LOWORD(wParam) >= kIdFilterAll && LOWORD(wParam) <= kIdFilterGarrisons && HIWORD(wParam) == BN_CLICKED) {
             g_filterSelection = LOWORD(wParam) - kIdFilterAll;
             CancelConfirmation(); FillList(); UpdatePrice();
