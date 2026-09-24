@@ -1,0 +1,26 @@
+# Local build output
+dist/
+*.map
+*.log
+*.pdb
+*.o
+*.obj
+
+# Editors and operating systems
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# Never commit game files or saves
+h3*.exe
+HotA.dll
+HD_MCR.dll
+version_real.dll
+*.lod
+*.pac
+*.h3m
+*.h3c
+*.gm1
+

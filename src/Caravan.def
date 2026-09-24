@@ -1,0 +1,5 @@
+LIBRARY Caravan
+EXPORTS
+    GetFileVersionInfoA=version_real.GetFileVersionInfoA
+    GetFileVersionInfoSizeA=version_real.GetFileVersionInfoSizeA
+    VerQueryValueA=version_real.VerQueryValueA
