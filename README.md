@@ -73,3 +73,6 @@ The result is written to `dist\Caravan.dll`. No Heroes III or HotA files are req
 
 This is an unofficial community project and is not affiliated with Ubisoft, New World Computing, 3DO or the HotA team. The repository contains no game executables, maps, saves or extracted game assets.
 
+## License
+
+The mod's original source code and project files are available under the [MIT License](LICENSE). This license does not apply to Heroes III, Horn of the Abyss, HD Mod, or any assets and trademarks owned by their respective rights holders.
