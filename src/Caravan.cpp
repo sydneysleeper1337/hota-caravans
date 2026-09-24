@@ -800,7 +800,14 @@ static void ChangeAvailable(const CaravanRow& row, int delta) {
     else *reinterpret_cast<int32_t*>(row.amount) += delta;
 }
 
-static bool IsPaid(const CaravanRow& row) { return row.kind != SourceKind::TownGarrison; }
+static bool IsPaid(const CaravanRow& row) {
+    if (row.kind == SourceKind::TownGarrison) return false;
+    if (row.kind == SourceKind::Dwelling) {
+        uint8_t* traits = CreatureTraits(row.creature);
+        if (traits && *reinterpret_cast<int*>(traits + kCreatureLevelOffset) == 0) return false;
+    }
+    return true;
+}
 
 static int* PlayerResources(int owner) {
     uint8_t* game = Game();

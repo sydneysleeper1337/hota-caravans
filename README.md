@@ -9,6 +9,7 @@ The first click on **Send** displays the complete price. Resources are charged o
 - In-game, Heroes III-styled selection window; no separate desktop application.
 - Explicit confirmation before any resources are spent.
 - Orders from captured dwellings and from other owned towns.
+- Level-one creatures from external dwellings are free, matching the native dwelling rule; the same creatures remain paid in towns.
 - A single **All** button selects every available creature the player can currently afford.
 - A physical wagon on the adventure map.
 - Heroes, monsters and garrisons block the route until the obstacle is removed.
