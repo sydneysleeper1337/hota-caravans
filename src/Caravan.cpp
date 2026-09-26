@@ -150,6 +150,10 @@ HIMAGELIST g_cardImages = nullptr;
 std::vector<CaravanRow> g_rows;
 #ifdef CARAVAN_PHYSICS
 std::vector<uint32_t> g_emptyCaravanSince;
+HHOOK g_gameThreadHook = nullptr;
+HWND g_physicalGameWindow = nullptr;
+UINT g_physicalTickMessage = 0;
+volatile LONG g_physicalTickPending = 0;
 #endif
 
 static void Log(const char* message) {
@@ -342,13 +346,14 @@ static bool DynamicObject(int type) {
     return type == kObjectHero || type == kObjectMonster || type == kObjectGarrison || type == kObjectGarrisonHorizontal;
 }
 
-static bool PlanCellWalkable(const uint8_t* cell) {
+static bool PlanCellWalkable(const uint8_t* cell, bool allowDynamicBlockers) {
     if (!BaseCellWalkable(cell)) return false;
     const int type = CellObjectType(cell);
     // Heroes, monsters and garrisons mark their occupied tile inaccessible.
-    // They are allowed in route planning so the caravan waits in front of
-    // them instead of treating a temporary blocker as a permanent wall.
-    if (DynamicObject(type)) return true;
+    // A first pass treats them as walls and therefore prefers a longer clear
+    // detour. A fallback pass allows them only when no clear route exists, so
+    // the caravan can wait for a genuinely unavoidable temporary obstacle.
+    if (DynamicObject(type)) return allowDynamicBlockers;
     return CellHasNoObject(cell) && (cell[0x0D] & 0x01) == 0;
 }
 
@@ -395,7 +400,8 @@ static void LogCellDiagnostics(const MapAccess& map, int centerX, int centerY, i
     Log(message);
 }
 
-static RouteResult FindRoute(const MapAccess& map, int startX, int startY, int z, int destinationX, int destinationY) {
+static RouteResult FindRoute(const MapAccess& map, int startX, int startY, int z,
+                             int destinationX, int destinationY, bool allowDynamicBlockers) {
     RouteResult result{false, startX, startY, 0};
     if (!MapCell(map, startX, startY, z)) return result;
     const int total = map.size * map.size;
@@ -422,7 +428,7 @@ static RouteResult FindRoute(const MapAccess& map, int startX, int startY, int z
             const int nx = x + direction[0];
             const int ny = y + direction[1];
             uint8_t* nextCell = MapCell(map, nx, ny, z);
-            if (!nextCell || !PlanCellWalkable(nextCell)) continue;
+            if (!nextCell || !PlanCellWalkable(nextCell, allowDynamicBlockers)) continue;
             const int next = nx + ny * map.size;
             if (previous[next] != -2) continue;
             previous[next] = current;
@@ -439,6 +445,12 @@ static RouteResult FindRoute(const MapAccess& map, int startX, int startY, int z
     result.nextY = first / map.size;
     result.distance = distance[goal];
     return result;
+}
+
+static RouteResult FindPreferredRoute(const MapAccess& map, int startX, int startY, int z,
+                                      int destinationX, int destinationY) {
+    RouteResult route = FindRoute(map, startX, startY, z, destinationX, destinationY, false);
+    return route.found ? route : FindRoute(map, startX, startY, z, destinationX, destinationY, true);
 }
 
 static uint8_t* FindTownById(uint8_t id) {
@@ -557,7 +569,7 @@ static bool FindSpawnCell(const CaravanRow& row, uint8_t* destinationTown, int& 
     // A dwelling stores the coordinates of its entrance object, not always
     // an empty neighbouring tile. Try the first map step from that entrance
     // before searching around the whole object footprint.
-    RouteResult entranceRoute = FindRoute(map, row.x, row.y, row.z, dx, dy);
+    RouteResult entranceRoute = FindPreferredRoute(map, row.x, row.y, row.z, dx, dy);
     if (entranceRoute.found &&
         CellEmptyForCaravan(MapCell(map, entranceRoute.nextX, entranceRoute.nextY, row.z))) {
         spawnX = entranceRoute.nextX;
@@ -574,7 +586,7 @@ static bool FindSpawnCell(const CaravanRow& row, uint8_t* destinationTown, int& 
                 if (std::max(abs(x - row.x), abs(y - row.y)) != radius) continue;
                 if (!CellEmptyForCaravan(MapCell(map, x, y, row.z))) continue;
                 ++emptyCandidates;
-                RouteResult route = FindRoute(map, x, y, row.z, dx, dy);
+                RouteResult route = FindPreferredRoute(map, x, y, row.z, dx, dy);
                 if (route.found && route.distance < best) {
                     best = route.distance; spawnX = x; spawnY = y;
                 }
@@ -703,7 +715,7 @@ static void ProcessPhysicalCaravans() {
                 }
                 break;
             }
-            RouteResult route = FindRoute(map, caravan.x, caravan.y, caravan.z, destinationX, destinationY);
+            RouteResult route = FindPreferredRoute(map, caravan.x, caravan.y, caravan.z, destinationX, destinationY);
             if (!route.found || (route.nextX == caravan.x && route.nextY == caravan.y)) break;
             uint8_t* nextCell = MapCell(map, route.nextX, route.nextY, caravan.z);
             if (!CellEmptyForCaravan(nextCell)) break;
@@ -751,6 +763,48 @@ static void TickPhysicalCaravans() {
         Sleep(500);
         ProcessPhysicalCaravans();
     }
+}
+
+static LRESULT CALLBACK GameThreadMessageHook(int code, WPARAM wParam, LPARAM lParam) {
+    if (code >= 0 && lParam && g_physicalTickMessage) {
+        MSG* message = reinterpret_cast<MSG*>(lParam);
+        if (message->message == g_physicalTickMessage && message->hwnd == g_physicalGameWindow) {
+            TickPhysicalCaravans();
+            InterlockedExchange(&g_physicalTickPending, 0);
+        }
+    }
+    return CallNextHookEx(g_gameThreadHook, code, wParam, lParam);
+}
+
+static bool InstallGameThreadHook(HWND gameWindow) {
+    if (!gameWindow || !IsWindow(gameWindow)) return false;
+    DWORD process = 0;
+    const DWORD thread = GetWindowThreadProcessId(gameWindow, &process);
+    if (!thread || process != GetCurrentProcessId()) return false;
+    if (g_gameThreadHook && g_physicalGameWindow == gameWindow) return true;
+    if (g_gameThreadHook) {
+        UnhookWindowsHookEx(g_gameThreadHook);
+        g_gameThreadHook = nullptr;
+    }
+    g_physicalGameWindow = gameWindow;
+    if (!g_physicalTickMessage)
+        g_physicalTickMessage = RegisterWindowMessageW(L"H3Caravan.PhysicalTick.1");
+    InterlockedExchange(&g_physicalTickPending, 0);
+    g_gameThreadHook = SetWindowsHookExW(WH_GETMESSAGE, GameThreadMessageHook, nullptr, thread);
+    if (!g_gameThreadHook) {
+        g_physicalGameWindow = nullptr;
+        Log("Could not install the main-thread caravan tick hook.");
+        return false;
+    }
+    Log("Main-thread caravan tick hook installed.");
+    return true;
+}
+
+static void RequestPhysicalCaravanTick() {
+    if (!g_gameThreadHook || !g_physicalGameWindow || !IsWindow(g_physicalGameWindow)) return;
+    if (InterlockedCompareExchange(&g_physicalTickPending, 1, 0) != 0) return;
+    if (!PostMessageW(g_physicalGameWindow, g_physicalTickMessage, 0, 0))
+        InterlockedExchange(&g_physicalTickPending, 0);
 }
 #endif
 
@@ -1516,11 +1570,20 @@ static DWORD WINAPI Worker(void*) {
         if (down && !wasDown && !g_dialog) {
             HWND gameWindow = nullptr;
             uint8_t* town = CurrentTown();
-            if (town && IsOurForegroundWindow(&gameWindow)) ShowDialog(gameWindow, town);
+            if (town && IsOurForegroundWindow(&gameWindow)) {
+#ifdef CARAVAN_PHYSICS
+                InstallGameThreadHook(gameWindow);
+#endif
+                ShowDialog(gameWindow, town);
+            }
         }
         wasDown = down;
 #ifdef CARAVAN_PHYSICS
-        TickPhysicalCaravans();
+        if (!g_gameThreadHook || !g_physicalGameWindow || !IsWindow(g_physicalGameWindow)) {
+            HWND gameWindow = nullptr;
+            if (IsOurForegroundWindow(&gameWindow)) InstallGameThreadHook(gameWindow);
+        }
+        RequestPhysicalCaravanTick();
 #endif
         Sleep(50);
     }

@@ -28,7 +28,7 @@ There is no networking, telemetry, updater or downloaded code. Runtime logging i
 - Surface-to-underground routing is not implemented.
 - Multiplayer and hot-seat behavior is untested.
 - Caravan markers are stored in padding-like bytes of the garrison record. Persistence and compatibility with every save/load path need wider testing.
-- A worker thread polls game state and touches game memory. Thread safety, especially around map transitions and shutdown, deserves additional review.
+- A worker thread polls the hotkey and requests physical-caravan ticks. Map movement and object deletion are dispatched through a thread-specific Windows message hook and execute on the game's main message thread. Other UI-driven game-memory access still deserves additional review.
 - Pathfinding intentionally treats heroes, monsters and garrisons as temporary blockers. Other unusual map objects may need special handling.
 - The UI and test coverage currently target Windows with HD Mod and Russian game text.
 

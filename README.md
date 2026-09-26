@@ -13,8 +13,10 @@ The first click on **Send** displays the complete price. Resources are charged o
 - A single **All** button selects every available creature the player can currently afford.
 - A physical wagon on the adventure map.
 - Heroes, monsters and garrisons block the route until the obstacle is removed.
+- Pathfinding prefers a longer clear detour; waiting is used only when every available route is blocked.
 - Friendly players can retrieve the troops; enemies can attack the caravan.
 - An emptied caravan disappears automatically after the troop-transfer window closes.
+- Caravan movement and removal are dispatched on the game thread to avoid racing HotA's map-object code.
 - Configurable hotkey in `Caravan.ini`.
 - Works without editing maps and does not modify the original game executables.
 

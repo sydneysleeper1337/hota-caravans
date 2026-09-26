@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.2 — 2026-09-26
+
+- Fixed a race condition that could crash HotA shortly after an empty caravan was removed.
+- Caravan movement and empty-wagon cleanup now run on the game's main message thread instead of the mod's background polling thread.
+- Caravans now prefer a longer clear detour around heroes, monsters and garrisons. They wait only when no clear route exists.
+
 ## v1.1.1 — 2026-09-25
 
 - Fixed level-one creatures from external dwellings being charged at their normal town price.
